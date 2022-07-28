@@ -95,7 +95,7 @@ def make_embeds(games: list):
         description = game['description'].replace(". ", ".\n> ")
         og_price = game['price']['totalPrice']['fmtPrice']['originalPrice']
         end_date = game['promotions']['promotionalOffers'][0]['promotionalOffers'][0]['endDate']
-        image = game['keyImages'][3]['url']
+        image = game['keyImages'][0]['url']
 
         embed = discord.Embed(
             title=title,

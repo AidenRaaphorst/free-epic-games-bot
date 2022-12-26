@@ -1,17 +1,21 @@
 import os
 import time
-import requests
+# import requests
 import json.decoder
 from dotenv import load_dotenv  # If not installed, run: pip install python-dotenv
 
-import discord  # If not installed, run: pip install discord
-from discord.ext import tasks
-from discord.ext import commands
+import discord  # If not installed, run: pip install -U discord.py
+from discord.ext import tasks, commands
+from requests_html import HTMLSession
 
+
+intents = discord.Intents.default()
+intents.message_content = True
 
 # User can edit these variables
+locale_country_code = "NL"  # Use your country code for the correct currency symbol
 iso_country_code = "NL"  # Use your country code for the correct time and currency
-client = commands.Bot(command_prefix='!')
+client = commands.Bot(intents=intents, command_prefix='!')
 channel_name = "free-games-bot"
 check_delay = 5  # Minutes
 
@@ -29,14 +33,18 @@ old_games_file_name = "old_games.json"
 
 @client.event
 async def on_ready():
-    print(f"{get_time()}: {client.user} has logged in")
+    log(f"{client.user} has logged in\n")
+    print(f"Check Delay: '{check_delay}' minutes")
+    print(f"Channel Name: '{channel_name}'")
+    print(f"ISO Country Code: '{iso_country_code}'")
+    print(f"Bot Prefix: '{client.command_prefix}'")
+    print()
 
     try:
         load_old_games()
-        print(f"{get_time()}: Loaded old embeds")
-    except FileNotFoundError as e:
-        print(f"{get_time()}: Error: \"{e}\"")
-        # print(f"{get_time()}: Error: Couldn't find & load file '{old_games_file_name}'")
+        log(f"Loaded '{old_games_file_name}'")
+    except FileNotFoundError:
+        log(f"Couldn't find or load file '{old_games_file_name}'")
 
     await client.change_presence(
         status=discord.Status.online,
@@ -57,22 +65,22 @@ async def check_and_send_embeds(channel: discord.TextChannel):
 
     # No games found
     if not games:
-        print(f"{get_time()}: No free games found in Epic Games Store")
+        log("No free games found in Epic Games Store")
         return
 
     # No new games found
     if old_games:
         if get_free_games()[0]['title'] == old_games[0]['title']:
-            print(f"{get_time()}: No new free games found")
+            log("No new free games found")
             return
 
     # New games found
     old_games = games
     save_old_games()
 
-    print(f"{get_time()}: New free games found: ")
+    log("New free games found: ")
     for embed in make_embeds(games):
-        print(embed.title.title())
+        print(f" - {embed.title.title()}")
         await channel.send(embed=embed)
 
 
@@ -87,14 +95,27 @@ async def freegames(ctx: discord.Message):
     for embed in embeds:
         await ctx.reply(embed=embed, mention_author=False)
 
+    log(f"User '{ctx.author}' executed 'freegames'")
+
+
+@client.command()
+async def clear(ctx: discord.Message, amount: int = 0):
+    await ctx.channel.purge(limit=amount+1)
+    log(f"User '{ctx.author}' executed 'clear', deleted {amount+1} message(s) including command message")
+
 
 def make_embeds(games: list):
     embeds = []
     for game in games:
         title = game['title']
-        description = game['description'].replace(". ", ".\n> ")
+        description = game['description']\
+            .replace("\n", "")\
+            .replace(". ", ".\n> ")\
+            .replace("! ", "!\n> ")\
+            .replace("? ", "?\n> ")\
+            .removesuffix("\n> ")
         og_price = game['price']['totalPrice']['fmtPrice']['originalPrice']
-        end_date = game['promotions']['promotionalOffers'][0]['promotionalOffers'][0]['endDate']
+        end_date = game['expiryDate']
         image = game['keyImages'][0]['url']
 
         embed = discord.Embed(
@@ -113,16 +134,77 @@ def make_embeds(games: list):
 
 def get_free_games():
     free_games = []
-    epic_games_store_data = requests.get(
-        f"https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?country={iso_country_code}"
+    session = HTMLSession()
+    epic_games_store_data = session.get(
+        f"https://store-site-backend-static-ipv4.ak.epicgames.com/freeGamesPromotions?country={iso_country_code}"
     ).json()
+
     games = epic_games_store_data['data']['Catalog']['searchStore']['elements']
     for game in games:
-        discount_price = game['price']['totalPrice']['discountPrice']
-        og_price = game['price']['totalPrice']['originalPrice']
+        title = game['title']
+        slug = game['productSlug']
+        if title == "Mystery Game":
+            continue
 
-        if discount_price == 0 and og_price > 0:
-            free_games.append(game)
+        # Get sandboxId
+        variables = json.dumps({
+            "pageSlug": slug,
+            "locale": locale_country_code
+        })
+        extensions = json.dumps({
+            "persistedQuery": {
+                "version": 1,
+                "sha256Hash": "781fd69ec8116125fa8dc245c0838198cdf5283e31647d08dfa27f45ee8b1f30"
+            }
+        })
+        r = session.get(
+            f'https://store.epicgames.com/graphql?operationName=getMappingByPageSlug'
+            f'&variables={variables}&extensions={extensions}'
+        ).json()
+        sandbox_id = r['data']['StorePageMapping']['mapping']['sandboxId']
+
+        # Get offerId
+        variables = json.dumps({
+            "allowCountries": "",
+            "category": "games/edition",
+            "country": iso_country_code,
+            "locale": locale_country_code,
+            "namespace": sandbox_id,
+            "sortBy": "pcReleaseDate",
+            "sortDir": "DESC",
+            "codeRedemptionOnly": False
+        })
+        extensions = json.dumps({
+            "persistedQuery": {
+                "version": 1,
+                "sha256Hash": "ff4dea7ebf14b25dc1cbedffe1d90620318a7bffea481fea02ac6e87310326f4"
+            }
+        })
+        r = session.get(
+            f'https://store.epicgames.com/graphql?operationName=getRelatedOfferIdsByCategory'
+            f'&variables={variables}&extensions={extensions}'
+        ).json()
+        offer_id = r['data']['Catalog']['catalogOffers']['elements'][0]['id']
+
+        # Get product info
+        variables = json.dumps({
+            "locale": locale_country_code,
+            "country": iso_country_code,
+            "offerId": offer_id,
+            "sandboxId": sandbox_id
+        })
+        extensions = json.dumps({
+            "persistedQuery": {
+                "version": 1,
+                "sha256Hash": "6797fe39bfac0e6ea1c5fce0ecbff58684157595fee77e446b4254ec45ee2dcb"
+            }
+        })
+        game_info = session.get(
+            f'https://store.epicgames.com/graphql?operationName=getCatalogOffer'
+            f'&variables={variables}&extensions={extensions}'
+        ).json()
+
+        free_games.append(game_info['data']['Catalog']['catalogOffer'])
 
     return free_games
 
@@ -131,7 +213,7 @@ def save_old_games():
     global old_games
 
     with open(old_games_file_name, 'w') as f:
-        json.dump(old_games, f)
+        json.dump(old_games, f, indent=4)
 
 
 def load_old_games():
@@ -143,6 +225,10 @@ def load_old_games():
 
 def get_time():
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+
+
+def log(msg: str):
+    print(f"[{get_time()}] {msg}")
 
 
 client.run(TOKEN)

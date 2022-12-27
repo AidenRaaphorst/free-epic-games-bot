@@ -12,7 +12,7 @@ Run: `docker run -it --name free-epic-games free-epic-games` \
 Or in one line: `docker run -it --name free-epic-games $(docker build . -t free-epic-games -q)`
 
 ### Without Docker
-Install the nessesary dependencies: `pip install -r requirements.txt`\
+Install the necessary dependencies: `pip install -r requirements.txt`\
 Run `main.py`
 
 ## Usage

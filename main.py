@@ -1,10 +1,11 @@
 import os
 import time
-# import requests
 import json.decoder
-from dotenv import load_dotenv  # If not installed, run: pip install python-dotenv
+from datetime import datetime
 
-import discord  # If not installed, run: pip install -U discord.py
+from dotenv import load_dotenv
+
+import discord
 from discord.ext import tasks, commands
 from requests_html import HTMLSession
 
@@ -115,15 +116,28 @@ def make_embeds(games: list):
             .replace("? ", "?\n> ")\
             .removesuffix("\n> ")
         og_price = game['price']['totalPrice']['fmtPrice']['originalPrice']
-        end_date = game['expiryDate']
-        image = game['keyImages'][0]['url']
+        slug = game['productSlug']
+
+        image = ""
+        key_images = game['keyImages']
+        for key_image in key_images:
+            if "wide" in key_image['type'].lower():
+                image = key_image['url']
+                break
+
+        # Convert UTC time in RFC 3339 format to Unix format
+        end_date = game['price']['lineOffers'][0]['appliedRules'][0]['endDate']
+        utc_dt = datetime.strptime(end_date, '%Y-%m-%dT%H:%M:%S.%fZ')
+        end_timestamp = (utc_dt - datetime(1970, 1, 1)).total_seconds().__int__()
 
         embed = discord.Embed(
             title=title,
             description=f"> {description}\n\n"
-                        f"~~{og_price}~~ **Free** until {str(end_date).split('T')[0]}\n",
+                        f"~~{og_price}~~ **Free** until <t:{end_timestamp}:f>\n",
             color=0x2f3136
         )
+        embed.add_field(name="Open in browser", value=f"**https://store.epicgames.com/p/{slug}**")
+        embed.add_field(name="Open in Epic Launcher", value=f"**<com.epicgames.launcher://store/p/{slug}>**")
         embed.set_thumbnail(url="https://upload.wikimedia.org/wikipedia/commons/a/a7/Epic_Games_logo.png")
         embed.set_image(url=image)
         embed.set_footer(text="via Ardyon's Discord Bot")
